@@ -1,5 +1,6 @@
 using HospitalApi.Data;
 using HospitalApi.DTOs;
+using HospitalApi.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -91,5 +92,58 @@ public class PatientsController : ControllerBase
             .ToListAsync();
 
         return Ok(patients);
+    }
+    
+    [HttpPost("{pesel}/bedassignments")]
+    public async Task<IActionResult> CreateBedAssignment(
+        string pesel,
+        [FromBody] CreateBedAssignmentDto dto)
+    {
+        var patient = await _context.Patients
+            .FirstOrDefaultAsync(p => p.Pesel == pesel);
+
+        if (patient == null)
+            return NotFound("Patient not found");
+
+        if (dto.To.HasValue && dto.To.Value <= dto.From)
+            return BadRequest("To date must be later than From date");
+
+        var bed = await _context.Beds
+            .Include(b => b.BedType)
+            .Include(b => b.Room)
+            .ThenInclude(r => r.Ward)
+            .Where(b =>
+                b.BedType.Name == dto.BedType &&
+                b.Room.Ward.Name == dto.Ward &&
+                !b.BedAssignments.Any(ba =>
+                    ba.From < (dto.To ?? DateTime.MaxValue) &&
+                    (ba.To ?? DateTime.MaxValue) > dto.From))
+            .FirstOrDefaultAsync();
+
+        if (bed == null)
+            return BadRequest("No available bed found");
+
+        var assignment = new BedAssignment
+        {
+            PatientPesel = pesel,
+            BedId = bed.Id,
+            From = dto.From,
+            To = dto.To
+        };
+
+        _context.BedAssignments.Add(assignment);
+
+        await _context.SaveChangesAsync();
+
+        return Created(
+            $"/api/patients/{pesel}/bedassignments/{assignment.Id}",
+            new
+            {
+                assignment.Id,
+                assignment.PatientPesel,
+                assignment.BedId,
+                assignment.From,
+                assignment.To
+            });
     }
 }
